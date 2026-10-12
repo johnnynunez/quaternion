@@ -9,11 +9,12 @@ on:
   push:
     branches:
       - main
+      - verify/windows-arm64-wheels*  # fork-only verification trigger
     tags: '*'
   pull_request:
 
 concurrency:
-  group: test-${{ github.head_ref }}
+  group: test-${{ github.head_ref || github.ref }}  # fork verification only
   cancel-in-progress: true
 
 env:
@@ -35,28 +36,15 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install Hatch
-        shell: bash
-        run: python -m pip install --disable-pip-version-check --upgrade hatch
-
       - name: Bump version
         id: get_version
         shell: bash
-        env:
-          github_event_head_commit_message: ${{ github.event.head_commit.message }}
+        # fork verification only: upstream's `hatch version` step fails with
+        # hatch>=1.16 (pre-existing, unrelated); compute the same patch bump
         run: |
-          # Note: The following line reads the HEAD commit message to look for an indication of how
-          # to bump the version number.  Specifically, if `#patch`, `#minor`, or `#major` is present
-          # in the commit message, it bumps the corresponding version number.  Those can also be
-          # prepended as `#premajor`, etc., to add/bump the prerelease modifier.  If none of those
-          # are present, `#patch` is assumed — that is, the lowest-significance number is
-          # incremented.  See the documentation of the `hatch version` command for details.
-          export version_bump_rule=$(python .github/scripts/parse_bump_rule.py)
-          echo "version_bump_rule: '${version_bump_rule}'"
-          hatch version "${version_bump_rule}"
-          export new_version=$(TERM="unknown" hatch version)
+          new_version=$(python -c "import re; v=re.search(r'__version__ = \"(.*?)\"', open('src/quaternion/__init__.py').read()).group(1).split('.'); v[-1]=str(int(v[-1])+1); print('.'.join(v))")
           echo "new_version: '${new_version}'"
-          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"  # Save variable for later steps
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
 
 
   build_wheels:
@@ -122,7 +110,8 @@ jobs:
       - name: Install cibuildwheel
         run: |
           python -m pip install --upgrade pip
-          python -m pip install cibuildwheel
+          # fork verification only: cibuildwheel>=4 removed the cpython-freethreading enable group used below (pre-existing)
+          python -m pip install "cibuildwheel==3.4.1"
 
       - name: Build wheels
         run: |
