@@ -40,7 +40,7 @@ def test_quaternion_nan_zero_and_wrong_inputs():
     with pytest.raises((ValueError, TypeError)):
         q.rotate_vectors(q.one, np.ones(2))
     with pytest.raises(AssertionError):
-        np.testing.assert_allclose(q.as_float_array(q.i*q.j), [0,0,0,-1], atol=0)
+        np.testing.assert_allclose(q.as_float_array(q.quaternion(0,1,0,0)*q.quaternion(0,0,1,0)), [0,0,0,-1], atol=0)
 
 @pytest.mark.skipif(KIND != 'scikit-image', reason='other distribution')
 def test_image_gaussian_against_scalar_convolution():

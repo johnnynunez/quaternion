@@ -16,7 +16,7 @@ jobs:
             source: '8658799289278aa4f7e2bdcf65660790300d0234'
             mode: source
     env:
-      AUDIT_quaternion: quaternion
+      AUDIT_KIND: quaternion
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
           $root = "$env:RUNNER_TEMP/image-numerics-${{ matrix.version }}"
           New-Item -ItemType Directory -Force "$root/evidence/wheels" | Out-Null
           "NATIVE_WORK=$root" | Out-File $env:GITHUB_ENV -Append
-          foreach ($pair in @('PIP_CACHE_DIR=pip','UV_CACHE_DIR=uv','UV_PYTHON_INSTALL_DIR=python','UV_PYTHON_BIN_DIR=bin','NUGET_numpy-quaternionS=nuget','NUGET_HTTP_CACHE_PATH=nuget-http','NUGET_PLUGINS_CACHE_PATH=nuget-plugins','VIRTUALENV_OVERRIDE_APP_DATA=virtualenv')) {
+          foreach ($pair in @('PIP_CACHE_DIR=pip','UV_CACHE_DIR=uv','UV_PYTHON_INSTALL_DIR=python','UV_PYTHON_BIN_DIR=bin','NUGET_PACKAGES=nuget','NUGET_HTTP_CACHE_PATH=nuget-http','NUGET_PLUGINS_CACHE_PATH=nuget-plugins','VIRTUALENV_OVERRIDE_APP_DATA=virtualenv')) {
             $k,$v=$pair.Split('='); "$k=$root/cache/$v" | Out-File $env:GITHUB_ENV -Append
           }
           @{source=$sha;wrapper='${{ github.sha }}';version='${{ matrix.version }}';mode='${{ matrix.mode }}';scope='native Windows ARM64 CPU, not GPU';numpy='2.3.5';scipy='1.16.3';numba='not installed; upstream optional unaccelerated path only'} | ConvertTo-Json | Set-Content "$root/evidence/provenance.json"
@@ -82,7 +82,7 @@ jobs:
           python -m venv "$env:NATIVE_WORK/venv"
           $py="$env:NATIVE_WORK/venv/Scripts/python.exe"
           & $py -m pip install --upgrade pip
-          & $py -m pip install 'numpy==2.3.5' 'scipy==1.16.3' pytest pytest-cov pytest-localserver pytest-faulthandler pytest-doctestplus numpydoc pooch packaging
+          & $py -m pip install 'numpy==2.3.5' 'scipy==1.16.3' 'pytest==8.4.2' pytest-pretty pytest-cov pytest-localserver pytest-faulthandler pytest-doctestplus numpydoc pooch packaging
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $whl = @(Get-ChildItem "$env:NATIVE_WORK/evidence/wheels/*.whl")[0]
           & $py -m pip install $whl.FullName
