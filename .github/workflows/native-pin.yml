@@ -1,0 +1,116 @@
+name: Native ARM64 exact-pin CPU evidence
+on:
+  push:
+    branches: [ci/win-arm64-quaternion-pin-20261012]
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: windows-11-arm
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '2024.0.13'
+            source: '8658799289278aa4f7e2bdcf65660790300d0234'
+            mode: source
+    env:
+      AUDIT_quaternion: quaternion
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: harness
+      - uses: actions/checkout@v4
+        with:
+          repository: moble/quaternion
+          ref: ${{ matrix.source }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - name: Isolated workspace and exact source verification
+        shell: pwsh
+        run: |
+          $sha = git -C source rev-parse HEAD
+          if ($sha -ne '${{ matrix.source }}') { throw 'source SHA mismatch' }
+          $root = "$env:RUNNER_TEMP/image-numerics-${{ matrix.version }}"
+          New-Item -ItemType Directory -Force "$root/evidence/wheels" | Out-Null
+          "NATIVE_WORK=$root" | Out-File $env:GITHUB_ENV -Append
+          foreach ($pair in @('PIP_CACHE_DIR=pip','UV_CACHE_DIR=uv','UV_PYTHON_INSTALL_DIR=python','UV_PYTHON_BIN_DIR=bin','NUGET_numpy-quaternionS=nuget','NUGET_HTTP_CACHE_PATH=nuget-http','NUGET_PLUGINS_CACHE_PATH=nuget-plugins','VIRTUALENV_OVERRIDE_APP_DATA=virtualenv')) {
+            $k,$v=$pair.Split('='); "$k=$root/cache/$v" | Out-File $env:GITHUB_ENV -Append
+          }
+          @{source=$sha;wrapper='${{ github.sha }}';version='${{ matrix.version }}';mode='${{ matrix.mode }}';scope='native Windows ARM64 CPU, not GPU';numpy='2.3.5';scipy='1.16.3';numba='not installed; upstream optional unaccelerated path only'} | ConvertTo-Json | Set-Content "$root/evidence/provenance.json"
+          python -c "import platform,sys,sysconfig; print(platform.platform(),sys.version,sysconfig.get_platform()); assert sysconfig.get_platform()=='win-arm64'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Build unchanged exact source or acquire published exact wheel
+        id: build
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip install 'numpy==2.3.5' 'scipy==1.16.3' setuptools wheel build hatchling meson-python ninja 'Cython==3.1.6' 'pythran==0.18.1' lazy-loader
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ('${{ matrix.mode }}' -eq 'source') {
+            python -m pip wheel ./source --no-deps --no-build-isolation -v -w "$env:NATIVE_WORK/evidence/wheels" 2>&1 | Tee-Object "$env:NATIVE_WORK/evidence/build.log"
+          } else {
+            python -m pip download 'numpy-quaternion==${{ matrix.version }}' --no-deps --only-binary=:all: -d "$env:NATIVE_WORK/evidence/wheels" 2>&1 | Tee-Object "$env:NATIVE_WORK/evidence/download.log"
+          }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Strict PE RECORD exact version and mutation negatives
+        if: success()
+        shell: pwsh
+        run: |
+          $whl = @(Get-ChildItem "$env:NATIVE_WORK/evidence/wheels/*.whl")
+          if ($whl.Count -ne 1) { throw 'expected one wheel' }
+          python harness/.ci-native/wheel_audit.py $whl[0].FullName '${{ matrix.version }}' "$env:NATIVE_WORK/evidence/wheel-audit.json"
+          exit $LASTEXITCODE
+      - name: Fresh installed runtime environment
+        id: install
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          python -m venv "$env:NATIVE_WORK/venv"
+          $py="$env:NATIVE_WORK/venv/Scripts/python.exe"
+          & $py -m pip install --upgrade pip
+          & $py -m pip install 'numpy==2.3.5' 'scipy==1.16.3' pytest pytest-cov pytest-localserver pytest-faulthandler pytest-doctestplus numpydoc pooch packaging
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $whl = @(Get-ChildItem "$env:NATIVE_WORK/evidence/wheels/*.whl")[0]
+          & $py -m pip install $whl.FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $py -m pip freeze | Set-Content "$env:NATIVE_WORK/evidence/pip-freeze.txt"
+          & $py -m pip check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $py -c "import importlib.metadata as m; assert m.version('numpy-quaternion')=='${{ matrix.version }}'; import numpy,scipy; print(numpy.__version__,scipy.__version__)"
+          exit $LASTEXITCODE
+      - name: Independent numerical oracles and wrong-input negatives
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          Set-Location $env:NATIVE_WORK
+          & "$env:NATIVE_WORK/venv/Scripts/python.exe" -m pytest "$env:GITHUB_WORKSPACE/harness/.ci-native/test_oracles.py" -v --junitxml="$env:NATIVE_WORK/evidence/oracles.xml" 2>&1 | Tee-Object "$env:NATIVE_WORK/evidence/oracles.log"
+          exit $LASTEXITCODE
+      - name: Full installed upstream package tests unchanged
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          Set-Location $env:NATIVE_WORK
+          & "$env:NATIVE_WORK/venv/Scripts/python.exe" -m pytest -c "$env:GITHUB_WORKSPACE/source/pyproject.toml" "$env:GITHUB_WORKSPACE/source/tests" --junitxml="$env:NATIVE_WORK/evidence/full.xml" --durations=20 2>&1 | Tee-Object "$env:NATIVE_WORK/evidence/full.log"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-numpy-quaternion-${{ matrix.version }}-${{ github.sha }}
+          path: ${{ env.NATIVE_WORK }}/evidence
+          if-no-files-found: error
+          retention-days: 14
